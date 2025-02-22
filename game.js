@@ -5,14 +5,13 @@ const p2NameInput = document.getElementById("p2Name");
 // Global game mode: "duo" or "solo" (default is "duo")
 let gameMode = "duo";
 
-// Updated duo mode listener: Clear player2 input when selected.
 duoBtn.addEventListener("click", () => {
   gameMode = "duo";
   duoBtn.style.border = "3px solid white";
   soloBtn.style.border = "none";
   p2NameInput.disabled = false;
   p2NameInput.placeholder = "Enter 🟥 Player 2 Name";
-  p2NameInput.value = ""; // Clear previous value
+  p2NameInput.value = "";
 });
 soloBtn.addEventListener("click", () => {
   gameMode = "solo";
@@ -162,10 +161,9 @@ document.addEventListener("keyup", (e) => {
 
 /*
   CONCURRENT MOVEMENT FIX:
-  - We compute dx/dy for both players
-  - Move horizontally for both at once, check collision => revert if needed
-  - Move vertically for both at once, check collision => revert if needed
-  - If solo mode, we call updateAI() after player1's move
+  - Compute dx/dy for both players and move.
+  - Always move player2 and revert both if collision occurs.
+  - If solo mode, run AI after movement, then perform a second collision check.
 */
 function movePlayers() {
   let dx1 = 0, dy1 = 0;
@@ -177,66 +175,56 @@ function movePlayers() {
   if (keys.w && player1.y > 0) dy1 = -speed;
   if (keys.s && player1.y + player1.height < canvas.height) dy1 = speed;
   
-  // Player2 movement in duo mode
+  // Player2 movement (for duo mode only; for solo, AI will adjust later)
   if (gameMode === "duo") {
     if (keys.ArrowLeft && player2.x > 0) dx2 = -speed;
     if (keys.ArrowRight && player2.x + player2.width < canvas.width) dx2 = speed;
     if (keys.ArrowUp && player2.y > 0) dy2 = -speed;
     if (keys.ArrowDown && player2.y + player2.height < canvas.height) dy2 = speed;
   }
-
-  // --- Horizontal move (both at once) ---
+  
+  // Horizontal move
   const oldP1x = player1.x;
   const oldP2x = player2.x;
   player1.x += dx1;
-  if (gameMode === "duo") {
-    player2.x += dx2;
-  }
-  // If collision => revert
+  player2.x += dx2; // always move player2
   if (rectCollision(player1, player2)) {
     player1.x = oldP1x;
-    if (gameMode === "duo") {
-      player2.x = oldP2x;
-    }
+    player2.x = oldP2x;
   }
-
-  // --- Vertical move (both at once) ---
+  
+  // Vertical move
   const oldP1y = player1.y;
   const oldP2y = player2.y;
   player1.y += dy1;
-  if (gameMode === "duo") {
-    player2.y += dy2;
-  }
-  // If collision => revert
+  player2.y += dy2; // always move player2
   if (rectCollision(player1, player2)) {
     player1.y = oldP1y;
-    if (gameMode === "duo") {
-      player2.y = oldP2y;
-    }
-  }
-
-  // If solo => run AI after player1's move
-  if (gameMode === "solo") {
-    updateAI();
-  }
-
-  // Shield toggles
-  player1.shieldActive = keys.q;
-  if (gameMode === "duo") {
-    player2.shieldActive = keys.m;
-  } else {
-    player2.shieldActive = false;
+    player2.y = oldP2y;
   }
   
+  // In Solo mode, run AI and then perform a second collision check
+  if (gameMode === "solo") {
+    let oldP2xAI = player2.x;
+    let oldP2yAI = player2.y;
+    updateAI();
+    if (rectCollision(player1, player2)) {
+      player2.x = oldP2xAI;
+      player2.y = oldP2yAI;
+    }
+  }
+  
+  // Shield toggles
+  player1.shieldActive = keys.q;
+  player2.shieldActive = keys.m;
   updateDirection();
 }
 
 /* 
-  rectCollision with margin: 
-  When players come within 'margin' px, treat it as collision.
+  rectCollision with margin
 */
 function rectCollision(rect1, rect2) {
-  const margin = 5; // Adjust margin as needed
+  const margin = 5;
   return rect1.x < rect2.x + rect2.width + margin &&
          rect1.x + rect1.width > rect2.x - margin &&
          rect1.y < rect2.y + rect2.height + margin &&
@@ -244,11 +232,14 @@ function rectCollision(rect1, rect2) {
 }
 
 /* 
-  UPDATED updateAI for Solo mode:
-  Uses proportional control for smoother tracking and a closer shooting threshold.
+  updateAI for Solo mode.
+  After moving player2 based on AI logic, we perform a collision check.
 */
 function updateAI() {
   if (gameMode === "solo") {
+    let oldP2x = player2.x;
+    let oldP2y = player2.y;
+    
     let centerX1 = player1.x + player1.width / 2;
     let centerY1 = player1.y + player1.height / 2;
     let centerX2 = player2.x + player2.width / 2;
@@ -257,106 +248,121 @@ function updateAI() {
     let diffX = centerX1 - centerX2;
     let diffY = centerY1 - centerY2;
     
-    // Proportional movement factor (adjust for responsiveness)
     let factor = 0.05;
-    let moveX = diffX * factor;
-    let moveY = diffY * factor;
-    
-    // Clamp movement to the defined speed
-    moveX = Math.max(-speed, Math.min(speed, moveX));
-    moveY = Math.max(-speed, Math.min(speed, moveY));
+    let moveX = Math.max(-speed, Math.min(speed, diffX * factor));
+    let moveY = Math.max(-speed, Math.min(speed, diffY * factor));
     
     player2.x += moveX;
     player2.y += moveY;
     
-    // Shoot if within a certain distance (e.g., 150 pixels)
+    // Second collision check: if overlapping, revert AI movement
+    if (rectCollision(player1, player2)) {
+      player2.x = oldP2x;
+      player2.y = oldP2y;
+    }
+    
     let distance = Math.sqrt(diffX * diffX + diffY * diffY);
     if (distance < 150 && player2.canShoot && gameRunning && !gamePaused) {
       shootBullet(player2, 2);
       player2.canShoot = false;
-      // Faster shooting delay for AI
       setTimeout(() => { player2.canShoot = true; }, 300);
     }
   }
 }
 
 function drawTopStatus() {
-  // ...unchanged...
   const leftX = 20, topY = 20, barWidth = 200, barHeight = 15;
+  
+  // Player1 Health
   ctx.fillStyle = "red";
-  ctx.fillRect(leftX, topY, (player1.health/100)*barWidth, barHeight);
+  ctx.fillRect(leftX, topY, (player1.health / 100) * barWidth, barHeight);
   ctx.strokeStyle = "white";
   ctx.strokeRect(leftX, topY, barWidth, barHeight);
   ctx.font = "14px Arial";
   ctx.textAlign = "left";
   ctx.fillStyle = "white";
-  ctx.fillText("Health: " + player1.health + "%", leftX+5, topY+13);
+  ctx.fillText("Health: " + player1.health + "%", leftX + 5, topY + 13);
   
-  let shieldColor1 = (player1.shield > 0)
-    ? ctx.createLinearGradient(leftX, topY+barHeight+5, leftX+barWidth, topY+barHeight+5)
+  // Player1 Shield
+  let shieldColor1 = player1.shield > 0
+    ? ctx.createLinearGradient(leftX, topY + barHeight + 5, leftX + barWidth, topY + barHeight + 5)
     : "#777";
   if (player1.shield > 0) {
     shieldColor1.addColorStop(0, "#4A90E2");
     shieldColor1.addColorStop(1, "#003366");
   }
   ctx.fillStyle = shieldColor1;
-  ctx.fillRect(leftX, topY+barHeight+5, (player1.shield/100)*barWidth, barHeight);
+  ctx.fillRect(leftX, topY + barHeight + 5, (player1.shield / 100) * barWidth, barHeight);
   ctx.strokeStyle = "white";
-  ctx.strokeRect(leftX, topY+barHeight+5, barWidth, barHeight);
+  ctx.strokeRect(leftX, topY + barHeight + 5, barWidth, barHeight);
   ctx.fillStyle = "white";
-  ctx.fillText("Shield: " + player1.shield + "% 🛡️", leftX+5, topY+barHeight*2+3);
+  ctx.fillText("Shield: " + player1.shield + "% 🛡️", leftX + 5, topY + barHeight * 2 + 3);
   
-  const nameBoxWidth = 220, nameBoxHeight = 30;
-  ctx.fillStyle = "white";
-  ctx.fillRect(leftX, topY+barHeight*2+20, nameBoxWidth, nameBoxHeight);
-  ctx.strokeStyle = "black";
-  ctx.lineWidth = 1;
-  ctx.strokeRect(leftX, topY+barHeight*2+20, nameBoxWidth, nameBoxHeight);
-  ctx.fillStyle = "blue";
-  ctx.font = "bold 16px Arial";
-  ctx.fillText("🟦 " + p1Name, leftX+10, topY+barHeight*2+27);
+  if (player1.shieldActive) {
+    ctx.strokeStyle = "cyan";
+    ctx.lineWidth = 3;
+    ctx.strokeRect(leftX - 2, topY - 2, barWidth + 4, barHeight * 2 + 9);
+  }
   
+  // Player2 Health
   const rightX = canvas.width - barWidth - 20;
   ctx.textAlign = "right";
   ctx.fillStyle = "red";
-  ctx.fillRect(rightX, topY, (player2.health/100)*barWidth, barHeight);
+  ctx.fillRect(rightX, topY, (player2.health / 100) * barWidth, barHeight);
   ctx.strokeStyle = "white";
   ctx.strokeRect(rightX, topY, barWidth, barHeight);
   ctx.font = "14px Arial";
   ctx.fillStyle = "white";
-  ctx.fillText("Health: " + player2.health + "%", rightX+barWidth-5, topY+13);
+  ctx.fillText("Health: " + player2.health + "%", rightX + barWidth - 5, topY + 13);
   
-  let shieldColor2 = (player2.shield > 0)
-    ? ctx.createLinearGradient(rightX, topY+barHeight+5, rightX+barWidth, topY+barHeight+5)
+  // Player2 Shield
+  let shieldColor2 = player2.shield > 0
+    ? ctx.createLinearGradient(rightX, topY + barHeight + 5, rightX + barWidth, topY + barHeight + 5)
     : "#777";
   if (player2.shield > 0) {
     shieldColor2.addColorStop(0, "#4A90E2");
     shieldColor2.addColorStop(1, "#003366");
   }
   ctx.fillStyle = shieldColor2;
-  ctx.fillRect(rightX, topY+barHeight+5, (player2.shield/100)*barWidth, barHeight);
+  ctx.fillRect(rightX, topY + barHeight + 5, (player2.shield / 100) * barWidth, barHeight);
   ctx.strokeStyle = "white";
-  ctx.strokeRect(rightX, topY+barHeight+5, barWidth, barHeight);
+  ctx.strokeRect(rightX, topY + barHeight + 5, barWidth, barHeight);
   ctx.fillStyle = "white";
-  ctx.fillText("Shield: " + player2.shield + "% 🛡️", rightX+barWidth-5, topY+barHeight*2+3);
+  ctx.fillText("Shield: " + player2.shield + "% 🛡️", rightX + barWidth - 5, topY + barHeight * 2 + 3);
   
+  if (player2.shieldActive) {
+    ctx.strokeStyle = "orange";
+    ctx.lineWidth = 3;
+    ctx.strokeRect(rightX - 2, topY - 2, barWidth + 4, barHeight * 2 + 9);
+  }
+  
+  // Name boxes
+  const nameBoxWidth = 220, nameBoxHeight = 30;
   ctx.fillStyle = "white";
-  ctx.fillRect(rightX, topY+barHeight*2+20, nameBoxWidth, nameBoxHeight);
+  ctx.fillRect(leftX, topY + barHeight * 2 + 20, nameBoxWidth, nameBoxHeight);
   ctx.strokeStyle = "black";
   ctx.lineWidth = 1;
-  ctx.strokeRect(rightX, topY+barHeight*2+20, nameBoxWidth, nameBoxHeight);
+  ctx.strokeRect(leftX, topY + barHeight * 2 + 20, nameBoxWidth, nameBoxHeight);
+  ctx.fillStyle = "blue";
+  ctx.font = "bold 16px Arial";
+  ctx.fillText("🟦 " + p1Name, leftX + 10, topY + barHeight * 2 + 27);
+  
+  ctx.fillStyle = "white";
+  ctx.fillRect(rightX, topY + barHeight * 2 + 20, nameBoxWidth, nameBoxHeight);
+  ctx.strokeStyle = "black";
+  ctx.lineWidth = 1;
+  ctx.strokeRect(rightX, topY + barHeight * 2 + 20, nameBoxWidth, nameBoxHeight);
   ctx.fillStyle = "red";
   ctx.font = "bold 16px Arial";
-  ctx.fillText("🟥 " + (gameMode==="solo" ? "Computer" : p2Name), rightX+nameBoxWidth-10, topY+barHeight*2+27);
+  ctx.fillText("🟥 " + (gameMode === "solo" ? "Computer" : p2Name), rightX + nameBoxWidth - 10, topY + barHeight * 2 + 27);
   ctx.textAlign = "left";
 }
 
 function drawControls() {
-  // ...unchanged...
   const boxWidth = 300, boxHeight = 50, padding = 20, radius = 10;
   const leftX = padding;
   const leftY = canvas.height - boxHeight - padding;
-  let grad1 = ctx.createLinearGradient(leftX, leftY, leftX, leftY+boxHeight);
+  let grad1 = ctx.createLinearGradient(leftX, leftY, leftX, leftY + boxHeight);
   grad1.addColorStop(0, "#777");
   grad1.addColorStop(1, "#444");
   ctx.save();
@@ -372,11 +378,11 @@ function drawControls() {
   ctx.font = "14px Arial";
   ctx.textAlign = "left";
   ctx.fillStyle = "white";
-  ctx.fillText("🟦P1: WASD | SPACE shoot | Q shield", leftX+10, leftY+30);
+  ctx.fillText("🟦P1: WASD | SPACE shoot | Q shield", leftX + 10, leftY + 30);
   
   const rightX = canvas.width - boxWidth - padding;
   const rightY = canvas.height - boxHeight - padding;
-  let grad2 = ctx.createLinearGradient(rightX, rightY, rightX, rightY+boxHeight);
+  let grad2 = ctx.createLinearGradient(rightX, rightY, rightX, rightY + boxHeight);
   grad2.addColorStop(0, "#777");
   grad2.addColorStop(1, "#444");
   ctx.save();
@@ -391,16 +397,15 @@ function drawControls() {
   ctx.restore();
   ctx.textAlign = "center";
   ctx.fillStyle = "white";
-  if (gameMode==="duo") {
-    ctx.fillText("🟥P2: Arrows | ENTER shoot | M shield", rightX+boxWidth/2, rightY+30);
+  if (gameMode === "duo") {
+    ctx.fillText("🟥P2: Arrows | ENTER shoot | M shield", rightX + boxWidth / 2, rightY + 30);
   } else {
-    ctx.fillText("🟥AI Controlled", rightX+boxWidth/2, rightY+30);
+    ctx.fillText("🟥AI Controlled", rightX + boxWidth / 2, rightY + 30);
   }
   ctx.textAlign = "left";
 }
 
 function drawPlayerNamesBox() {
-  // ...unchanged...
   const boxWidth = 500, boxHeight = 50;
   const x = (canvas.width - boxWidth) / 2;
   const y = 100;
@@ -412,22 +417,24 @@ function drawPlayerNamesBox() {
   ctx.font = "bold 20px Arial";
   ctx.textAlign = "left";
   ctx.fillStyle = "blue";
-  ctx.fillText("🟦 " + p1Name, x+20, y+30);
+  ctx.fillText("🟦 " + p1Name, x + 20, y + 30);
   ctx.textAlign = "right";
   ctx.fillStyle = "red";
-  ctx.fillText("🟥 " + (gameMode==="solo" ? "Computer" : p2Name), x+boxWidth-20, y+30);
+  ctx.fillText("🟥 " + (gameMode === "solo" ? "Computer" : p2Name), x + boxWidth - 20, y + 30);
   ctx.textAlign = "left";
 }
 
 function gameLoop() {
   if (!gameRunning || gamePaused) return;
   ctx.clearRect(0, 0, canvas.width, canvas.height);
+  
   drawTopStatus();
   movePlayers();
   updateBullets();
   drawPlayer(player1);
   drawPlayer(player2);
   drawControls();
+  
   checkGameOver();
   requestAnimationFrame(gameLoop);
 }
@@ -439,7 +446,7 @@ function drawPlayer(player) {
     ctx.strokeStyle = player.shieldBroken ? "orange" : "cyan";
     ctx.lineWidth = 3;
     ctx.beginPath();
-    ctx.arc(player.x + player.width/2, player.y + player.height/2, player.width, 0, Math.PI*2);
+    ctx.arc(player.x + player.width / 2, player.y + player.height / 2, player.width, 0, Math.PI * 2);
     ctx.stroke();
   }
 }
@@ -451,26 +458,26 @@ function shootBullet(player, owner) {
   }
   const bSize = 10;
   let bx = player.x, by = player.y, vx = 0, vy = 0;
-  let dir = player.lastDir || (owner===1 ? "right" : "left");
+  let dir = player.lastDir || (owner === 1 ? "right" : "left");
   if (dir === "up") {
-    bx = player.x + player.width/2 - bSize/2;
+    bx = player.x + player.width / 2 - bSize / 2;
     by = player.y - bSize;
-    vx = 0; 
+    vx = 0;
     vy = -10;
   } else if (dir === "down") {
-    bx = player.x + player.width/2 - bSize/2;
+    bx = player.x + player.width / 2 - bSize / 2;
     by = player.y + player.height;
-    vx = 0; 
+    vx = 0;
     vy = 10;
   } else if (dir === "left") {
     bx = player.x - bSize;
-    by = player.y + player.height/2 - bSize/2;
-    vx = -10; 
+    by = player.y + player.height / 2 - bSize / 2;
+    vx = -10;
     vy = 0;
   } else {
     bx = player.x + player.width;
-    by = player.y + player.height/2 - bSize/2;
-    vx = 10; 
+    by = player.y + player.height / 2 - bSize / 2;
+    vx = 10;
     vy = 0;
   }
   const bullet = {
@@ -490,7 +497,7 @@ function updateBullets() {
     let bullet = bullets[i];
     bullet.x += bullet.speedX;
     bullet.y += bullet.speedY;
-    ctx.fillStyle = (bullet.owner === 1) ? "cyan" : "orange";
+    ctx.fillStyle = bullet.owner === 1 ? "cyan" : "orange";
     ctx.fillRect(bullet.x, bullet.y, bullet.width, bullet.height);
     if (
       bullet.x < 0 || bullet.x > canvas.width ||
@@ -571,10 +578,10 @@ function showGameOverScreen() {
 }
 
 /*
-  UPDATED dropPlayers: Increase dropSpeed from 5 to 10 for a faster drop animation.
+  dropPlayers: Increase dropSpeed from 5 to 10 for a faster drop animation.
 */
 function dropPlayers() {
-  let dropSpeed = 10; // Increased speed for drop animation
+  let dropSpeed = 10;
   let countdown = 3;
   let countdownInterval = setInterval(() => {
     ctx.clearRect(0, 0, canvas.width, canvas.height);
@@ -638,14 +645,14 @@ function restartGame() {
   document.getElementById("pauseScreen").classList.add("hidden");
   document.getElementById("startScreen").classList.remove("hidden");
   
-  player1.x = 100; 
-  player1.y = 0; 
-  player1.health = 100; 
+  player1.x = 100;
+  player1.y = 0;
+  player1.health = 100;
   player1.shield = 100;
   
-  player2.x = 600; 
-  player2.y = 0; 
-  player2.health = 100; 
+  player2.x = 600;
+  player2.y = 0;
+  player2.health = 100;
   player2.shield = 100;
   
   bullets = [];
@@ -653,7 +660,7 @@ function restartGame() {
   
   document.getElementById("p1Name").value = "";
   document.getElementById("p2Name").value = "";
-  p1Name = defaultP1Name; 
+  p1Name = defaultP1Name;
   p2Name = defaultP2Name;
   gameRunning = false;
 }
@@ -663,7 +670,4 @@ document.getElementById("p1Name").addEventListener("input", function() {
   let newName = this.value.trim();
   p1Name = newName === "" ? defaultP1Name : newName;
 });
-document.getElementById("p2Name").addEventListener("input", function() {
-  let newName = this.value.trim();
-  p2Name = newName === "" ? defaultP2Name : newName;
-});
+docum
